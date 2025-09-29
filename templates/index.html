@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>StudySpark Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>StudySpark — RAG + Tutor (Gemini)</h1>
+    <form id="chat-form">
+      <label>User</label>
+      <select id="user_id">
+        {% for u in users %}
+        <option value="{{u}}">{{u}}</option>
+        {% endfor %}
+      </select>
+
+      <label>Question</label>
+      <textarea id="question" rows="3" placeholder="Ask anything about your data or 'how to' use StudySpark..."></textarea>
+
+      <button type="submit">Ask</button>
+    </form>
+    <div id="answer"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById('chat-form');
+    const out  = document.getElementById('answer');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      out.innerHTML = "Thinking...";
+      const user_id = document.getElementById('user_id').value;
+      const question = document.getElementById('question').value;
+      const res = await fetch('/ask', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ user_id, question })
+      });
+      const data = await res.json();
+      if(data.ok){
+        out.innerHTML = `<pre>${data.answer}</pre>`;
+      } else {
+        out.innerHTML = `<b>Error:</b> ${data.error}`;
+      }
+    });
+  </script>
+</body>
+</html>
