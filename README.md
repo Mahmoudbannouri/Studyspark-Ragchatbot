@@ -1,5 +1,109 @@
 # StudySpark — Assistant Chat (RAG + Gemini)
 
+An intelligent educational assistant powered by Retrieval-Augmented Generation (RAG) and Google's Gemini model. This system provides contextually aware responses by combining efficient document retrieval with state-of-the-art AI generation.
+
+## 🌟 Key Features
+
+- **Hybrid Retrieval System**:
+  - BM25 text search for keyword matching
+  - Gemini `text-embedding-004` for semantic understanding
+  - Smart context ranking and selection
+
+- **Intelligent Interactions**:
+  - Maintains chat session history for contextual responses
+  - Automatic onboarding mode for new users
+  - Direct database queries for "latest" and "list" commands
+  - Role-based access control (student/educator)
+
+- **Advanced AI Integration**:
+  - Powered by Google's Gemini model
+  - Automatic model discovery and fallbacks
+  - Optimized chunk management for context
+
+## 🛠️ Technical Stack
+
+- **Backend Framework**: Flask 3.0.3
+- **AI Model**: Google Gemini (version 0.7.2)
+- **Search Engine**: rank-bm25 0.2.2
+- **Data Processing**: NumPy 2.x
+- **Configuration**: python-dotenv 1.0.1
+- **Data Validation**: pydantic 2.9.2
+
+## 📋 Prerequisites
+
+- Python 3.8 or higher
+- Google AI (Gemini) API key
+- pip for package management
+
+## 🚀 Getting Started
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Mahmoudbannouri/Studyspark-Ragchatbot.git
+   cd Studyspark-Ragchatbot
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Configure environment:
+   Create a `.env` file with:
+   ```
+   GEMINI_API_KEY=your_api_key_here
+   ```
+
+4. Run the application:
+   ```bash
+   python app.py
+   ```
+
+Visit `http://localhost:5000` to start using the assistant.
+
+## 🏗️ Project Structure
+
+- `app.py`: Flask application setup and routing
+- `rag_core.py`: Core RAG implementation and Gemini integration
+- `mock_db.py`: Demo database implementation
+- `templates/`: Web interface templates
+- `static/`: CSS and static assets
+- `requirements.txt`: Project dependencies
+
+## 💡 Usage Guide
+
+1. Access the web interface
+2. Select your user ID (demo mode)
+3. Start asking questions or use commands:
+   - Regular questions get AI-powered responses
+   - "latest X" for recent items
+   - "list X" for item listings
+
+## 🔧 Configuration Options
+
+Environment variables (in `.env`):
+- `EMBEDDING_MODEL`: Set embedding model (default: "models/text-embedding-004")
+- `GENERATION_MODEL`: Set Gemini model (default: "gemini-1.5-flash")
+- `GEMINI_API_KEY`: Your Google AI API key
+
+## 📝 Development Notes
+
+- Demo implementation with mock database
+- Production deployment should include:
+  - Proper authentication system
+  - Persistent database
+  - Rate limiting
+  - Error handling
+  - Logging system
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests.rk — Assistant Chat (RAG + Gemini)
+
 A minimal end-to-end assistant for StudySpark with hybrid RAG, Gemini generation, session history, onboarding for new users, and natural answers for “latest” and “list” requests.
 
 ## Features
