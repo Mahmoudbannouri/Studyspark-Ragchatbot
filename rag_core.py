@@ -53,25 +53,43 @@ def chunk_text(text: str, size: int = 800, overlap: int = 120) -> List[str]:
 
 def build_corpus(db: Dict[str, Any]) -> List[DocChunk]:
     corpus: List[DocChunk] = []
+
     def add_chunks(kind, rec, content, title_key="title"):
-        uid = rec["user_id"]; sid = rec["id"]; title = rec.get(title_key, kind)
+        uid = rec.get("user_id", f"u{rec.get('userId', 'unknown')}")
+        sid = rec.get("id", "unknown")
+        title = rec.get(title_key) or rec.get("name") or kind
         for ch in chunk_text(content):
             corpus.append(DocChunk(str(uuid.uuid4()), uid, kind, sid, title, ch))
 
-    for r in db["resources"]: add_chunks("resource", r, r["content"])
-    for n in db["notes"]:     add_chunks("note", n, n["content"])
-    for s in db.get("summaries", []): add_chunks("summary", s, s["content"], title_key="source")
+    # ✅ Patch: fallback to other keys when 'content' missing
+    for r in db.get("resources", []):
+        content = r.get("content") or r.get("text") or r.get("summary") or r.get("description") or ""
+        if not content:
+            content = f"Document: {r.get('name', 'Untitled')} (no textual content extracted)."
+        add_chunks("resource", r, content, title_key="name")
+
+    for n in db.get("notes", []):
+        content = n.get("content") or n.get("text") or ""
+        add_chunks("note", n, content, title_key="title")
+
+    for s in db.get("summaries", []):
+        content = s.get("content") or s.get("summary") or ""
+        add_chunks("summary", s, content, title_key="source")
+
     for f in db.get("flashcards", []):
-        joined = f"Q: {f['q']}\nA: {f['a']}\nDeck: {f['deck']}"
+        joined = f"Q: {f.get('q', '')}\nA: {f.get('a', '')}\nDeck: {f.get('deck', 'Deck')}"
         add_chunks("flashcard", f, joined, title_key="deck")
+
     for qz in db.get("quiz", []):
-        last = qz.get("attempts", [{}])[-1] if qz.get("attempts") else {}
-        content = f"Subject: {qz['subject']}\nQuestions: {qz['questions']}\nLastScore: {last.get('score','N/A')}"
+        last = (qz.get("attempts", [{}]) or [{}])[-1]
+        content = f"Subject: {qz.get('subject', 'Quiz')}\nQuestions: {qz.get('questions', [])}\nLastScore: {last.get('score', 'N/A')}"
         add_chunks("quiz", qz, content, title_key="subject")
+
     for sp in db.get("study_plans", []):
-        tasks = "\n".join([f"- {t['title']} ({t['duration_min']} min, {t['priority']})" for t in sp["tasks"]])
-        content = f"Goal: {sp['goal']}\nTasks:\n{tasks}"
+        tasks = "\n".join([f"- {t.get('title')} ({t.get('duration_min')} min, {t.get('priority')})" for t in sp.get("tasks", [])])
+        content = f"Goal: {sp.get('goal', 'Goal')}\nTasks:\n{tasks}"
         add_chunks("study_plan", sp, content, title_key="goal")
+
     return corpus
 
 def tokenize(text: str) -> List[str]:
@@ -213,6 +231,15 @@ Capabilities you should proactively mention when relevant:
 
 When the user asks "how to" questions, explain steps clearly. Offer to create artifacts (notes, flashcards, quiz items, tasks) from the conversation.
 """
+CONTEXT_STRICTNESS = """
+Behavior Rules:
+- Only answer questions about the users own uploaded or discussed materials.
+- If a topic is not found in prior summaries, flashcards, or chat history, reply:
+  "I dont have information on that topic yet. Try uploading or summarizing resources about it first."
+- Never list internal identifiers like [summary:summary#5]; use the document or topic title directly.
+- Never offer generic actions (like generating quizzes or summaries) unless explicitly requested.
+- Always stay consistent with previous chat context and data.
+"""
 
 DATA_POLICY_GUARD = """
 Data Isolation Policy:
@@ -241,21 +268,23 @@ Onboarding Mode:
 def format_context(chunks: List[DocChunk]) -> str:
     out = []
     for c in chunks:
-        cite = f"[{c.kind}:{c.title}#{c.source_id}]"
-        out.append(f"{cite}\n{c.text}")
+        title = c.title or "Untitled"
+        out.append(f"From '{title}':\n{c.text}")
     return "\n\n".join(out)
 
-def build_prompt(user_id: str, query: str, context_chunks: List[DocChunk], chat_history: Optional[List[Dict[str, str]]] = None) -> str:
+def build_prompt(user_id: str, query: str, context_chunks: List[DocChunk], chat_history=None) -> str:
     history_block = ""
     if chat_history:
         lines = []
-        # Limit to last 10 messages to keep prompt reasonable
         for m in chat_history[-10:]:
             role = m.get("role", "user")
             text = m.get("text", "")
             lines.append(f"{role}: {text}")
         history_block = "\nPrevious conversation (most recent last):\n" + "\n".join(lines)
+
     return f"""{PLATFORM_TUTOR_GUIDE}
+
+{CONTEXT_STRICTNESS}
 
 {DATA_POLICY_GUARD.format(user_id=user_id)}
 
