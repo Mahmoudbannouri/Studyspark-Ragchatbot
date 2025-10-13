@@ -42,6 +42,11 @@ class DocChunk:
     text: str
 
 def chunk_text(text: str, size: int = 800, overlap: int = 120) -> List[str]:
+    """
+    [R] Splits input text into overlapping chunks for retrieval.
+    Why: Makes resource content manageable and improves retrieval granularity.
+    Used in: Corpus creation, indexing.
+    """
     chunks, start = [], 0
     while start < len(text):
         end = min(len(text), start + size)
@@ -52,6 +57,11 @@ def chunk_text(text: str, size: int = 800, overlap: int = 120) -> List[str]:
     return chunks
 
 def build_corpus(db: Dict[str, Any]) -> List[DocChunk]:
+    """
+    [R] Builds a list of DocChunk instances from various user/resource data sources.
+    Why: Standardizes all user content for search/retrieval.
+    Used in: Index rebuilding, at startup or database update.
+    """
     corpus: List[DocChunk] = []
 
     def add_chunks(kind, rec, content, title_key="title"):
@@ -93,27 +103,45 @@ def build_corpus(db: Dict[str, Any]) -> List[DocChunk]:
     return corpus
 
 def tokenize(text: str) -> List[str]:
+    """
+    [R] Tokenizes a string to produce lowercase alphanumerics for lexical search.
+    Why: Needed for BM25 and any lexical retrieval method.
+    """
     return re.findall(r"[A-Za-z0-9_]+", text.lower())
 
 # -------------------------
 # BM25 per-user (lexical)
 # -------------------------
 class UserBM25:
+    """
+    [R] BM25-based lexical retrieval index per user.
+    Why: Provides fast, interpretable keyword-based relevance search per user.
+    """
     def __init__(self):
         self.user_docs   = defaultdict(list)
         self.user_chunks = defaultdict(list)
         self.user_bm25   = {}
 
     def add(self, chunk: DocChunk):
+        """
+        [R] Adds a DocChunk to the user's BM25 document store.
+        """
         self.user_docs[chunk.user_id].append(chunk.text)
         self.user_chunks[chunk.user_id].append(chunk)
 
     def build(self):
+        """
+        [R] Builds BM25 indices for all users from their document lists.
+        """
         for uid, docs in self.user_docs.items():
             tokenized = [tokenize(d) for d in docs]
             self.user_bm25[uid] = BM25Okapi(tokenized)
 
     def add_chunks_and_rebuild_user(self, uid: str, new_chunks: List["DocChunk"]):
+        """
+        [R] Adds new chunks for a specific user and rebuilds their BM25 index only.
+        Why: Supports fast incremental indexing for ongoing chat.
+        """
         for ch in new_chunks:
             self.user_docs[ch.user_id].append(ch.text)
             self.user_chunks[ch.user_id].append(ch)
@@ -124,6 +152,10 @@ class UserBM25:
             self.user_bm25[uid] = BM25Okapi(tokenized)
 
     def search(self, uid: str, query: str, k: int) -> List[Tuple[DocChunk, float]]:
+        """
+        [R] Lexically retrieves up to k most relevant chunks for uid's query using BM25.
+        Why: Provides initial retrieval layer for RAG.
+        """
         if ROLE_ADMIN_SEE_ALL:
             all_docs, all_chunks = [], []
             for docs in self.user_docs.values():   all_docs.extend(docs)
@@ -144,11 +176,19 @@ class UserBM25:
 # Pure-NumPy vector index (Gemini embeddings)
 # -------------------------
 class UserVectorIndex:
+    """
+    [R] Dense vector store for user content using Gemini embeddings.
+    Why: Similarity-based retrieval to complement BM25.
+    """
     def __init__(self):
         self.user_chunks: Dict[str, List[DocChunk]] = {}
         self.user_matrix: Dict[str, np.ndarray]     = {}  # normalized
 
     def _embed_batch(self, texts: List[str]) -> np.ndarray:
+        """
+        [R] Batch-embeds a list of texts using Gemini's text embedding model.
+        Why: Converts user/resource text content into high-dimensional vectors for similarity search.
+        """
         try:
             vecs = []
             for t in texts:
@@ -164,12 +204,19 @@ class UserVectorIndex:
             raise RuntimeError(msg)
 
     def add_user(self, uid: str, chunks: List[DocChunk]):
+        """
+        [R] Adds and embeds all user chunks, overwriting any previous data for that user.
+        """
         texts = [c.text for c in chunks]
         Xn = self._embed_batch(texts)
         self.user_chunks[uid] = chunks
         self.user_matrix[uid] = Xn
 
     def search(self, uid: str, query: str, k: int) -> List[Tuple[DocChunk, float]]:
+        """
+        [R] Dense-retrieves top-k most similar chunks for uid and query using vector similarity.
+        Why: Handles semantic queries BM25 cannot.
+        """
         if ROLE_ADMIN_SEE_ALL:
             all_chunks, all_texts = [], []
             for chunks in self.user_chunks.values():
@@ -191,6 +238,10 @@ class UserVectorIndex:
         return [(chunks[i], float(sims[:,0][i])) for i in idx]
 
     def add_chunks_for_user(self, uid: str, new_chunks: List["DocChunk"]):
+        """
+        [R] Appends and embeds new chunks for a given user incrementally.
+        Why: Allows fast update of user index after each chat turn.
+        """
         texts = [c.text for c in new_chunks]
         Xn_new = self._embed_batch(texts)
         if uid in self.user_matrix:
@@ -206,6 +257,11 @@ class UserVectorIndex:
 # -------------------------
 def hybrid_retrieve(uid: str, query: str, bm25: UserBM25, vindex: UserVectorIndex,
                     top_k_bm25=6, top_k_vec=6, merge_k=6):
+    """
+    [R] Combines lexical (BM25) and dense (Gemini vector) retrievals, merges result lists.
+    Why: Hybrid strategy maximizes recall and relevance for each user query.
+    Used in: Main answer/question pipeline.
+    """
     bm25_hits = bm25.search(uid, query, top_k_bm25)
     vec_hits  = vindex.search(uid, query, top_k_vec)
 
@@ -266,6 +322,11 @@ Onboarding Mode:
 """
 
 def format_context(chunks: List[DocChunk]) -> str:
+    """
+    [A] Formats context chunks for LLM consumption (for prompt augmentation).
+    Why: Ensures LLM prompt is concise, readable, and informative.
+    Used in: Prompt construction before generation.
+    """
     out = []
     for c in chunks:
         title = c.title or "Untitled"
@@ -273,6 +334,10 @@ def format_context(chunks: List[DocChunk]) -> str:
     return "\n\n".join(out)
 
 def build_prompt(user_id: str, query: str, context_chunks: List[DocChunk], chat_history=None) -> str:
+    """
+    [A] Constructs the full prompt for the LLM, combining user question, context, and chat history.
+    Why: Augments retrieved chunks with user question and recent history for LLM input.
+    """
     history_block = ""
     if chat_history:
         lines = []
@@ -300,6 +365,11 @@ Context:
 Respond now."""
 
 def build_onboarding_prompt(user_id: str, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
+    """
+    [A] Creates a special onboarding prompt for when user lacks indexed data.
+    Why: Ensures new users get helpful generative answers based on platform abilities.
+    Used in: Onboarding fallback during answering.
+    """
     history_block = ""
     if chat_history:
         lines = []
@@ -329,6 +399,11 @@ Respond now."""
 # Chat session helpers
 # -------------------------
 def get_or_create_session(db: Dict[str, Any], user_id: str, session_id: Optional[str]) -> Dict[str, Any]:
+    """
+    [R] Looks up or creates a chat session for the user.
+    Why: Maintains per-user chat and recall of message history for continuity.
+    Used in: Every question-handling call from the app.
+    """
     if session_id:
         for s in db["qa_sessions"]:
             if s.get("id") == session_id and s.get("user_id") == user_id:
@@ -345,6 +420,11 @@ def get_or_create_session(db: Dict[str, Any], user_id: str, session_id: Optional
 
 def index_chat_turn(user_id: str, session_id: str, question: str, answer: str,
                     bm25: UserBM25, vindex: UserVectorIndex):
+    """
+    [R] Indexes a chat turn's Q/A into both retrieval indices (BM25, vector).
+    Why: Enables future queries to leverage previous chat as context.
+    Used in: After each answer, for continual learning.
+    """
     qa_chunks: List[DocChunk] = []
     qa_chunks.append(DocChunk(str(uuid.uuid4()), user_id, "chat", session_id, "user_question", question))
     qa_chunks.append(DocChunk(str(uuid.uuid4()), user_id, "chat", session_id, "assistant_answer", answer))
@@ -355,9 +435,17 @@ def index_chat_turn(user_id: str, session_id: str, question: str, answer: str,
 # Direct account-data answers (no LLM needed)
 # -------------------------
 def _normalize(s: str) -> str:
+    """
+    [A] Normalizes string for intent/account detection (lowercase/strip).
+    Used in: Heuristic account data Q/A.
+    """
     return (s or "").strip().lower()
 
 def get_latest_quiz_for_user(db: Dict[str, Any], user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    [R] Gets the most recent quiz taken/created by the user.
+    Why: Used for shortcut/direct retrieval Q/A without invoking LLM/generation.
+    """
     latest = None
     for qz in db.get("quiz", []):
         if qz.get("user_id") != user_id:
@@ -374,12 +462,21 @@ def get_latest_quiz_for_user(db: Dict[str, Any], user_id: str) -> Optional[Dict[
     return latest
 
 def get_latest_simple_item(items: List[Dict[str, Any]], user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    [R] Gets latest (last) simple item matching user_id.
+    Why: Used for "latest X" direct retrieval questions.
+    """
     owned = [x for x in items if x.get("user_id") == user_id]
     if not owned:
         return None
     return owned[-1]
 
 def maybe_answer_account_query(db: Dict[str, Any], user_id: str, question: str) -> Optional[str]:
+    """
+    [R] Answers user account/info questions about latest activity/items directly, without generation.
+    Why: Shortcut to avoid generation for simple factual queries.
+    Used in: Fast-path Q/A in answer_question.
+    """
     q = _normalize(question)
     role = get_user_role(db, user_id)
     if role == "admin":
@@ -439,6 +536,10 @@ def maybe_answer_account_query(db: Dict[str, Any], user_id: str, question: str) 
 # List/overview answers for account data
 # -------------------------
 def _format_bulleted(lines: List[str], limit: int = 8) -> str:
+    """
+    [A] Formats a list of items as markdown bullets for list-type responses.
+    Why: User-friendly list presentation for account overviews.
+    """
     if not lines:
         return ""
     if len(lines) > limit:
@@ -448,6 +549,11 @@ def _format_bulleted(lines: List[str], limit: int = 8) -> str:
     return "\n".join([f"- {l}" for l in lines])
 
 def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> Optional[str]:
+    """
+    [R] Handles questions requesting lists or overviews of user account items (resources, quizzes, etc).
+    Why: Provides direct, interpretable results for simple list queries.
+    Used in: Fast-path before generating long responses.
+    """
     q = _normalize(question)
     role = get_user_role(db, user_id)
     if role == "admin":
@@ -530,6 +636,11 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
 # Public API
 # -------------------------
 def init_indices(db: Dict[str, Any]):
+    """
+    [R] Builds/rebuilds both BM25 and embedding-based indices from the database.
+    Why: Prepares everything for future retrieval operations as soon as data changes.
+    Used in: On startup or data import.
+    """
     corpus = build_corpus(db)
 
     bm25 = UserBM25()
@@ -546,6 +657,13 @@ def init_indices(db: Dict[str, Any]):
 
 def answer_question(db: Dict[str, Any], bm25: UserBM25, vindex: UserVectorIndex,
                     user_id: str, question: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    [R, A, G] Master pipeline for processing (a) fast account/list retrieval, (b) context assembly, and (c) LLM-based generation.
+    - [R] Checks for direct/account list answers.
+    - [A] Builds prompt/context as needed for generative step.
+    - [G] Calls generative model(s) if retrieval/augmentation insufficient; records all into chat session.
+    Why: This is the main app entry point for question+answer logic and all study assistant interactions.
+    """
     # Admin guardrail: admins don’t see other users’ content via chat
     role = get_user_role(db, user_id)
     if role == "admin" and not ROLE_ADMIN_SEE_ALL:
