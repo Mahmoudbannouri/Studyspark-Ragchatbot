@@ -394,7 +394,7 @@ def maybe_answer_account_query(db: Dict[str, Any], user_id: str, question: str) 
     if any(k in q for k in ["quiz", "test", "quizz"]):
         info = get_latest_quiz_for_user(db, user_id)
         if not info:
-            return "I don’t see any quizzes yet. Want me to create a starter quiz for you?"
+            return "I don’t see any quizzes yet."
         quiz = info["quiz"]
         att = info["attempt"]
         subject = quiz.get("subject", "Untitled")
@@ -402,7 +402,7 @@ def maybe_answer_account_query(db: Dict[str, Any], user_id: str, question: str) 
             score = att.get("score", "N/A")
             date = att.get("date", "recently")
             return f"Your most recent quiz was in {subject}. You scored {score} on {date}."
-        return f"You have a quiz for {subject}, but no attempts yet. Want to take it now?"
+        return f"You have a quiz for {subject}, but no attempts yet."
     # Resource
     if any(k in q for k in ["resource", "document", "doc", "fichier"]):
         res = get_latest_simple_item(db.get("resources", []), user_id)
@@ -413,7 +413,7 @@ def maybe_answer_account_query(db: Dict[str, Any], user_id: str, question: str) 
     if any(k in q for k in ["note", "notes"]):
         note = get_latest_simple_item(db.get("notes", []), user_id)
         if not note:
-            return "You don’t have any notes yet. Want me to start a note for you?"
+            return "You don’t have any notes yet."
         return f"Your latest note is “{note.get('title','Untitled')}”."
     # Summary
     if any(k in q for k in ["summary", "résumé", "resume"]):
@@ -476,14 +476,14 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
             else:
                 lines.append(f"{subject}: no attempts yet")
         if not lines:
-            return "You don’t have any quizzes yet. I can create one from your notes or a resource."
+            return "You don’t have any quizzes yet."
         return "Here are your quizzes:\n" + _format_bulleted(lines)
 
     # Flashcards (group by deck)
     if any(k in q for k in ["flashcard", "flashcards", "cards", "deck", "decks"]):
         owned = [f for f in db.get("flashcards", []) if f.get("user_id") == user_id]
         if not owned:
-            return "You don’t have any flashcards yet. Want me to build a deck from your material?"
+            return "You don’t have any flashcards yet."
         # Deck counts
         deck_to_count: Dict[str, int] = {}
         for f in owned:
@@ -512,7 +512,7 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
     if any(k in q for k in ["summary", "summaries", "résumé", "resumes"]):
         owned = [s for s in db.get("summaries", []) if s.get("user_id") == user_id]
         if not owned:
-            return "No summaries yet. I can generate one from a resource or note."
+            return "No summaries yet."
         lines = [f"for {s.get('source','unknown')} ({s.get('length','')})".strip() for s in owned]
         return "Your summaries:\n" + _format_bulleted(lines)
 
