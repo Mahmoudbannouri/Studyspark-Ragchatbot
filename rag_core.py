@@ -71,11 +71,17 @@ def build_corpus(db: Dict[str, Any]) -> List[DocChunk]:
         for ch in chunk_text(content):
             corpus.append(DocChunk(str(uuid.uuid4()), uid, kind, sid, title, ch))
 
-    # ✅ Patch: fallback to other keys when 'content' missing
+    # ✅ UPDATED: Prioritize extractedText/transcription from DB exports, then fallbacks
     for r in db.get("resources", []):
-        content = r.get("content") or r.get("text") or r.get("summary") or r.get("description") or ""
-        if not content:
-            content = f"Document: {r.get('name', 'Untitled')} (no textual content extracted)."
+        content = (
+            r.get("extractedText") or  # Primary: From PDF/text extraction in DB
+            r.get("transcription") or  # Optional: For audio/video
+            r.get("content") or 
+            r.get("text") or 
+            r.get("summary") or 
+            r.get("description") or 
+            f"Document: {r.get('name', 'Untitled')} (no textual content extracted)."
+        )
         add_chunks("resource", r, content, title_key="name")
 
     for n in db.get("notes", []):
@@ -101,7 +107,6 @@ def build_corpus(db: Dict[str, Any]) -> List[DocChunk]:
         add_chunks("study_plan", sp, content, title_key="goal")
 
     return corpus
-
 def tokenize(text: str) -> List[str]:
     """
     [R] Tokenizes a string to produce lowercase alphanumerics for lexical search.
@@ -570,24 +575,23 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
     if any(k in q for k in ["quiz", "quizzes", "tests"]):
         lines: List[str] = []
         for qz in db.get("quiz", []):
-            if qz.get("user_id") != user_id:
-                continue
-            subject = qz.get("subject", "Untitled")
-            attempts = qz.get("attempts", []) or []
-            if attempts:
-                last = attempts[-1]
-                score = last.get("score", "N/A")
-                date = last.get("date", "")
-                lines.append(f"{subject}: last score {score}{(' on ' + date) if date else ''}")
-            else:
-                lines.append(f"{subject}: no attempts yet")
+            if (qz.get("user_id") == user_id or str(qz.get("userId")) == str(user_id)):
+                subject = qz.get("subject", "Untitled")
+                attempts = qz.get("attempts", []) or []
+                if attempts:
+                    last = attempts[-1]
+                    score = last.get("score", "N/A")
+                    date = last.get("date", "")
+                    lines.append(f"{subject}: last score {score}{(' on ' + date) if date else ''}")
+                else:
+                    lines.append(f"{subject}: no attempts yet")
         if not lines:
             return "You don’t have any quizzes yet."
         return "Here are your quizzes:\n" + _format_bulleted(lines)
 
     # Flashcards (group by deck)
     if any(k in q for k in ["flashcard", "flashcards", "cards", "deck", "decks"]):
-        owned = [f for f in db.get("flashcards", []) if f.get("user_id") == user_id]
+        owned = [f for f in db.get("flashcards", []) if (f.get("user_id") == user_id or str(f.get("userId")) == str(user_id))]
         if not owned:
             return "You don’t have any flashcards yet."
         # Deck counts
@@ -600,15 +604,15 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
 
     # Resources
     if any(k in q for k in ["resource", "resources", "document", "documents", "fichier", "fichiers"]):
-        owned = [r for r in db.get("resources", []) if r.get("user_id") == user_id]
+        owned = [r for r in db.get("resources", []) if (r.get("user_id") == user_id or str(r.get("userId")) == str(user_id))]
         if not owned:
             return "No resources yet. I can help you upload your first file."
-        titles = [r.get("title", "Untitled") for r in owned]
+        titles = [r.get("title") or r.get("name") or r.get("originalName") or "Untitled" for r in owned]
         return "Your resources:\n" + _format_bulleted(titles)
 
     # Notes
     if any(k in q for k in ["note", "notes"]):
-        owned = [n for n in db.get("notes", []) if n.get("user_id") == user_id]
+        owned = [n for n in db.get("notes", []) if (n.get("user_id") == user_id or str(n.get("userId")) == str(user_id))]
         if not owned:
             return "No notes yet. I can start a note for you."
         titles = [n.get("title", "Untitled") for n in owned]
@@ -616,7 +620,7 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
 
     # Summaries
     if any(k in q for k in ["summary", "summaries", "résumé", "resumes"]):
-        owned = [s for s in db.get("summaries", []) if s.get("user_id") == user_id]
+        owned = [s for s in db.get("summaries", []) if (s.get("user_id") == user_id or str(s.get("userId")) == str(user_id))]
         if not owned:
             return "No summaries yet."
         lines = [f"for {s.get('source','unknown')} ({s.get('length','')})".strip() for s in owned]
@@ -624,7 +628,7 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
 
     # Study plans
     if any(k in q for k in ["plan", "plans", "study plan", "planning"]):
-        owned = [p for p in db.get("study_plans", []) if p.get("user_id") == user_id]
+        owned = [p for p in db.get("study_plans", []) if (p.get("user_id") == user_id or str(p.get("userId")) == str(user_id))]
         if not owned:
             return "No study plans yet. I can set one up for your next exam."
         lines = [p.get("goal", "Goal") for p in owned]
