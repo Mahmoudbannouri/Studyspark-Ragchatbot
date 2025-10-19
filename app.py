@@ -64,7 +64,7 @@ def ask():
             db_data,
             bm25_index,
             vec_index,
-            f"u{user_id}",
+            str(user_id),  # ✅ Just pass the numeric ID as string
             question,
             session_id=session_id
         )

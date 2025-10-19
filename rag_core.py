@@ -65,17 +65,26 @@ def build_corpus(db: Dict[str, Any]) -> List[DocChunk]:
     corpus: List[DocChunk] = []
 
     def add_chunks(kind, rec, content, title_key="title"):
-        uid = rec.get("user_id", f"u{rec.get('userId', 'unknown')}")
+        # ✅ FIXED: Normalize user_id to plain string without "u" prefix
+        raw_uid = rec.get("user_id") or rec.get("userId", "unknown")
+        if isinstance(raw_uid, int):
+            uid = str(raw_uid)  # Convert int to string: 1 -> "1"
+        elif isinstance(raw_uid, str):
+            # Strip "u" prefix if present: "u1" -> "1"
+            uid = raw_uid[1:] if raw_uid.startswith("u") else raw_uid
+        else:
+            uid = str(raw_uid)
+        
         sid = rec.get("id", "unknown")
         title = rec.get(title_key) or rec.get("name") or kind
         for ch in chunk_text(content):
             corpus.append(DocChunk(str(uuid.uuid4()), uid, kind, sid, title, ch))
 
-    # ✅ UPDATED: Prioritize extractedText/transcription from DB exports, then fallbacks
+    # ✅ Resources
     for r in db.get("resources", []):
         content = (
-            r.get("extractedText") or  # Primary: From PDF/text extraction in DB
-            r.get("transcription") or  # Optional: For audio/video
+            r.get("extractedText") or
+            r.get("transcription") or
             r.get("content") or 
             r.get("text") or 
             r.get("summary") or 
@@ -84,23 +93,44 @@ def build_corpus(db: Dict[str, Any]) -> List[DocChunk]:
         )
         add_chunks("resource", r, content, title_key="name")
 
+    # ✅ Notes
     for n in db.get("notes", []):
         content = n.get("content") or n.get("text") or ""
         add_chunks("note", n, content, title_key="title")
 
+    # ✅ Summaries - FIX THE RECORD PASSED TO add_chunks
     for s in db.get("summaries", []):
         content = s.get("content") or s.get("summary") or ""
-        add_chunks("summary", s, content, title_key="source")
 
+        # Build readable title
+        title_parts = []
+        if s.get("type"):
+            title_parts.append(s.get("type").capitalize())
+        if s.get("documentId"):
+            title_parts.append(f"Doc#{s['documentId']}")
+        if s.get("keyPoints"):
+            if isinstance(s["keyPoints"], (list, tuple)) and len(s["keyPoints"]) > 0:
+                title_parts.append(s["keyPoints"][0])
+        title = " | ".join(title_parts) if title_parts else "Summary"
+
+        # ✅ Pass the original summary object with its userId field
+        add_chunks("summary", s, content, title_key=None)
+        # Override title after creation (since we built it above)
+        if corpus and corpus[-1].kind == "summary":
+            corpus[-1].title = title
+
+    # ✅ Flashcards
     for f in db.get("flashcards", []):
         joined = f"Q: {f.get('q', '')}\nA: {f.get('a', '')}\nDeck: {f.get('deck', 'Deck')}"
         add_chunks("flashcard", f, joined, title_key="deck")
 
+    # ✅ Quizzes
     for qz in db.get("quiz", []):
         last = (qz.get("attempts", [{}]) or [{}])[-1]
         content = f"Subject: {qz.get('subject', 'Quiz')}\nQuestions: {qz.get('questions', [])}\nLastScore: {last.get('score', 'N/A')}"
         add_chunks("quiz", qz, content, title_key="subject")
 
+    # ✅ Study plans
     for sp in db.get("study_plans", []):
         tasks = "\n".join([f"- {t.get('title')} ({t.get('duration_min')} min, {t.get('priority')})" for t in sp.get("tasks", [])])
         content = f"Goal: {sp.get('goal', 'Goal')}\nTasks:\n{tasks}"
@@ -522,7 +552,17 @@ def maybe_answer_account_query(db: Dict[str, Any], user_id: str, question: str) 
         sm = get_latest_simple_item(db.get("summaries", []), user_id)
         if not sm:
             return "No summaries yet. I can generate one from a resource or note."
-        return f"Your latest summary is linked to “{sm.get('source','unknown')}”."
+        doc_id = sm.get("documentId") or "?"
+        summary_type = sm.get("type", "unknown")
+        key_points = sm.get("keyPoints")
+        if isinstance(key_points, (list, tuple)) and key_points:
+            key_hint = key_points[0]
+        elif isinstance(key_points, str):
+            key_hint = key_points
+        else:
+            key_hint = ""
+        return f"Your latest summary is a {summary_type} summary for Document #{doc_id}{f' about {key_hint}' if key_hint else ''}."
+
     # Flashcards
     if any(k in q for k in ["flashcard", "cards", "deck"]):
         fc = get_latest_simple_item(db.get("flashcards", []), user_id)
@@ -560,22 +600,72 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
     Used in: Fast-path before generating long responses.
     """
     q = _normalize(question)
+    print(f"🔍 List query check: normalized='{q}', user_id='{user_id}'")
+    
     role = get_user_role(db, user_id)
     if role == "admin":
-        return ("For privacy, I don’t list individual users’ items. "
+        return ("For privacy, I don't list individual users' items. "
                 "I can provide aggregated usage or help with moderation policies.")
-    wants_list = any(k in q for k in ["all", "list", "show", "voir", "tous", "toutes", "what", "which"]) and \
-                 any(k in q for k in ["quiz", "quizzes", "tests", "flashcard", "flashcards", "cards", "resources", "documents", "notes", "summaries", "decks", "plans", "study plans"])
+    
+    # ✅ Check if asking about summaries (with typo tolerance)
+    asking_summaries = any(word in q for word in ["summar", "summr", "summri", "summeri", "résumé", "resume"])
+    
+    # ✅ EXPANDED: More flexible detection for listing intent
+    wants_list = (
+        any(k in q for k in ["all", "list", "show", "voir", "tous", "toutes", "what", "which", "my", "got", "have"]) and
+        (any(k in q for k in ["quiz", "quizzes", "tests", "flashcard", "flashcards", "cards", "resources", "documents", "notes", "decks", "plans", "study"]) or asking_summaries)
+    )
+    
     if not wants_list:
         # Heuristics for phrasings like "what flashcards i did"
         if not any(k in q for k in ["did", "done", "completed", "pris", "fait"]):
+            print(f"  ➤ No list intent detected")
             return None
+    
+    print(f"  ➤ List intent detected!")
+
+    # ===== SUMMARIES ===== (using flexible matching for typos)
+    if asking_summaries:
+        print(f"  ➤ Checking summaries...")
+        print(f"  ➤ Total summaries in DB: {len(db.get('summaries', []))}")
+        
+        # ✅ FIXED: Normalize both sides to strings for comparison
+        owned = []
+        for s in db.get("summaries", []):
+            s_user_id = s.get("user_id") or s.get("userId")
+            print(f"    - Summary ID={s.get('id')}, userId={s_user_id}, type={type(s_user_id)}")
+            
+            # Compare as strings
+            if str(s_user_id) == str(user_id):
+                owned.append(s)
+        
+        print(f"  ➤ Owned summaries: {len(owned)}")
+        
+        if not owned:
+            return "No summaries yet."
+        
+        lines = []
+        for s in owned:
+            doc_id = s.get("documentId") or "?"
+            summary_type = s.get("type", "unknown").capitalize()
+            key_points = []
+            if s.get("keyPoints"):
+                if isinstance(s["keyPoints"], (list, tuple)):
+                    key_points = s["keyPoints"]
+                elif isinstance(s["keyPoints"], str):
+                    key_points = [s["keyPoints"]]
+            main_point = key_points[0] if key_points else ""
+            lines.append(f"{summary_type} summary for Document #{doc_id} {f'– {main_point}' if main_point else ''}".strip())
+
+        if not lines:
+            return "You don't have any summaries yet."
+        return "Your summaries:\n" + _format_bulleted(lines)
 
     # Quizzes
     if any(k in q for k in ["quiz", "quizzes", "tests"]):
         lines: List[str] = []
         for qz in db.get("quiz", []):
-            if (qz.get("user_id") == user_id or str(qz.get("userId")) == str(user_id)):
+            if str(qz.get("user_id", qz.get("userId"))) == str(user_id):
                 subject = qz.get("subject", "Untitled")
                 attempts = qz.get("attempts", []) or []
                 if attempts:
@@ -586,14 +676,14 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
                 else:
                     lines.append(f"{subject}: no attempts yet")
         if not lines:
-            return "You don’t have any quizzes yet."
+            return "You don't have any quizzes yet."
         return "Here are your quizzes:\n" + _format_bulleted(lines)
 
     # Flashcards (group by deck)
     if any(k in q for k in ["flashcard", "flashcards", "cards", "deck", "decks"]):
-        owned = [f for f in db.get("flashcards", []) if (f.get("user_id") == user_id or str(f.get("userId")) == str(user_id))]
+        owned = [f for f in db.get("flashcards", []) if str(f.get("user_id", f.get("userId"))) == str(user_id)]
         if not owned:
-            return "You don’t have any flashcards yet."
+            return "You don't have any flashcards yet."
         # Deck counts
         deck_to_count: Dict[str, int] = {}
         for f in owned:
@@ -604,7 +694,7 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
 
     # Resources
     if any(k in q for k in ["resource", "resources", "document", "documents", "fichier", "fichiers"]):
-        owned = [r for r in db.get("resources", []) if (r.get("user_id") == user_id or str(r.get("userId")) == str(user_id))]
+        owned = [r for r in db.get("resources", []) if str(r.get("user_id", r.get("userId"))) == str(user_id)]
         if not owned:
             return "No resources yet. I can help you upload your first file."
         titles = [r.get("title") or r.get("name") or r.get("originalName") or "Untitled" for r in owned]
@@ -612,30 +702,21 @@ def maybe_answer_list_query(db: Dict[str, Any], user_id: str, question: str) -> 
 
     # Notes
     if any(k in q for k in ["note", "notes"]):
-        owned = [n for n in db.get("notes", []) if (n.get("user_id") == user_id or str(n.get("userId")) == str(user_id))]
+        owned = [n for n in db.get("notes", []) if str(n.get("user_id", n.get("userId"))) == str(user_id)]
         if not owned:
             return "No notes yet. I can start a note for you."
         titles = [n.get("title", "Untitled") for n in owned]
         return "Your notes:\n" + _format_bulleted(titles)
 
-    # Summaries
-    if any(k in q for k in ["summary", "summaries", "résumé", "resumes"]):
-        owned = [s for s in db.get("summaries", []) if (s.get("user_id") == user_id or str(s.get("userId")) == str(user_id))]
-        if not owned:
-            return "No summaries yet."
-        lines = [f"for {s.get('source','unknown')} ({s.get('length','')})".strip() for s in owned]
-        return "Your summaries:\n" + _format_bulleted(lines)
-
     # Study plans
     if any(k in q for k in ["plan", "plans", "study plan", "planning"]):
-        owned = [p for p in db.get("study_plans", []) if (p.get("user_id") == user_id or str(p.get("userId")) == str(user_id))]
+        owned = [p for p in db.get("study_plans", []) if str(p.get("user_id", p.get("userId"))) == str(user_id)]
         if not owned:
             return "No study plans yet. I can set one up for your next exam."
         lines = [p.get("goal", "Goal") for p in owned]
         return "Your study plans:\n" + _format_bulleted(lines)
 
     return None
-
 # -------------------------
 # Public API
 # -------------------------
